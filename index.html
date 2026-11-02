@@ -802,8 +802,8 @@
   .kpi-card:hover, .card:hover{box-shadow:0 6px 18px -8px rgba(11,33,72,0.18); transform:translateY(-1px);}
   table.skeleton-table.scroll-table thead th{position:sticky; top:0; z-index:2;}
 </style>
-<script src="vendor/html2canvas.min.js"></script>
-<script src="vendor/jspdf.umd.min.js"></script>
+<script src="vendor/html2canvas.min.js" onerror="this.onerror=null;var s=document.createElement('script');s.src='https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js';document.head.appendChild(s);"></script>
+<script src="vendor/jspdf.umd.min.js" onerror="this.onerror=null;var s=document.createElement('script');s.src='https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js';document.head.appendChild(s);"></script>
 <script src="vendor/qrcode.js"></script>
 <script>
 /* ============================================================
@@ -2196,11 +2196,30 @@ function billBalance(b){
    no popup window needed since html2canvas + jsPDF are already loaded on
    the main page.
    ============================================================ */
+/* PDF libraries: normally loaded from the local vendor/ folder; if that folder is missing
+   (e.g. only index.html was copied) they are fetched from a CDN the first time they are needed. */
+var _pdfLibsPromise = null;
+function loadScriptOnce(src){
+  return new Promise(function(res, rej){
+    var el = document.createElement('script');
+    el.src = src; el.onload = res; el.onerror = function(){ rej(new Error('Could not load '+src)); };
+    document.head.appendChild(el);
+  });
+}
+function ensurePdfLibs(){
+  var ok = function(){ return typeof html2canvas !== 'undefined' && window.jspdf && window.jspdf.jsPDF; };
+  if(ok()) return Promise.resolve();
+  if(_pdfLibsPromise) return _pdfLibsPromise;
+  var p = Promise.resolve();
+  if(typeof html2canvas === 'undefined') p = p.then(function(){ return loadScriptOnce('https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js'); });
+  if(!(window.jspdf && window.jspdf.jsPDF)) p = p.then(function(){ return loadScriptOnce('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js'); });
+  _pdfLibsPromise = p.then(function(){ if(!ok()) throw new Error('PDF library unavailable'); })
+                     .catch(function(e){ _pdfLibsPromise = null; throw e; });
+  return _pdfLibsPromise;
+}
 async function exportListPDF(title, filename){
-  if(typeof html2canvas === 'undefined' || typeof window.jspdf === 'undefined' || !window.jspdf.jsPDF){
-    showToast('PDF library still loading — please try again in a moment.', 'error');
-    return;
-  }
+  try{ await ensurePdfLibs(); }
+  catch(e){ showToast('Could not load the PDF library. Please check your internet connection and try again.', 'error'); return; }
   const table = document.querySelector('#content table.skeleton-table');
   if(!table){ showToast('Nothing to export on this screen.', 'error'); return; }
   showToast('Preparing PDF…');
@@ -5945,17 +5964,12 @@ function stmtAreaLabel(list, f){
 function buildBillStatementHTML(list, f){
   const c = state.company;
   const areaLabel = stmtAreaLabel(list, f);
-  const magTotals = stmtMagazineTotals(list);
-  const magTotalsHTML = magTotals.length ? `
-    <table class="stmt-mags">
-      <thead><tr><th>MAGAZINE NAME</th><th style="text-align:right;">TOTAL QTY</th></tr></thead>
-      <tbody>${magTotals.map(m=>`<tr><td>${esc(m.name)}</td><td style="text-align:right;">${m.qty}</td></tr>`).join('')}</tbody>
-      <tfoot><tr><td>TOTAL</td><td style="text-align:right;">${magTotals.reduce((a,m)=>a+m.qty,0)}</td></tr></tfoot>
-    </table>` : '';
   const dmData = JSON.stringify({
     title: 'Bill Balance Statement From '+formatDateDisplay(f.startDate)+' To '+formatDateDisplay(f.endDate),
     sub: f.customerType+' - '+f.paymentMode+' | Area: '+areaLabel,
     company: c.name||'The Distribution Ledger',
+    addr: c.address||'',
+    contact: (c.phone||'')+(c.email?' · '+c.email:''),
     rows: list.map((r,i)=>({
       n: i+1,
       name: (r.partyName||'')+' -> '+subscriberAddressLine(r.partyCode),
@@ -5964,8 +5978,7 @@ function buildBillStatementHTML(list, f){
       mag: stmtMagazineText(r),
       bal: Number(r.amount||0).toFixed(2)
     })),
-    total: list.reduce((a,r)=>a+Number(r.amount||0),0).toFixed(2),
-    mags: magTotals
+    total: list.reduce((a,r)=>a+Number(r.amount||0),0).toFixed(2)
   }).replace(/</g,'\\u003c');
   const rows = list.length ? list.map((r,i)=>`
     <tr>
@@ -5981,25 +5994,27 @@ function buildBillStatementHTML(list, f){
 
   return `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Bill Balance Statement</title>
   <link rel="stylesheet" href="app://crm/fonts/fonts.css">
-  <script src="app://crm/vendor/html2canvas.min.js"><\/script>
-  <script src="app://crm/vendor/jspdf.umd.min.js"><\/script>
+  <script src="app://crm/vendor/html2canvas.min.js" onerror="this.onerror=null;var s=document.createElement('script');s.src='https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js';document.head.appendChild(s);"><\/script>
+  <script src="app://crm/vendor/jspdf.umd.min.js" onerror="this.onerror=null;var s=document.createElement('script');s.src='https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js';document.head.appendChild(s);"><\/script>
   <style>
     *{box-sizing:border-box;}
-    body{font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif; color:#1B2333; max-width:1000px; margin:28px auto; padding:0 16px; -webkit-print-color-adjust:exact; print-color-adjust:exact; background:#fff;}
-    .stmt-head{text-align:center; border-bottom:2px solid #0B2148; padding-bottom:14px; margin-bottom:14px;}
-    .stmt-head h1{font-size:22px; margin:0 0 4px; letter-spacing:.01em; color:#0B2148; font-weight:800;}
-    .stmt-head p{margin:1px 0; font-size:15px; color:#000;}
-    .stmt-title{font-size:16.5px; font-weight:700; margin:14px 0 2px; color:#0B2148;}
-    .stmt-sub{font-size:15px; color:#000; margin:0 0 14px;}
-    table{width:100%; border-collapse:collapse; margin-bottom:8px; border:1px solid #DFE5EF; border-radius:8px; overflow:hidden;}
-    th{text-align:left; font-size:14.5px; text-transform:uppercase; letter-spacing:.06em; padding:10px 8px; background:#0B2148; color:#fff; font-weight:600;}
-    td{font-size:16.5px; padding:8px; vertical-align:top; border-bottom:1px solid #E7ECF4;}
-    .stmt-sno{width:44px;}
-    .stmt-area{width:130px;}
-    .stmt-billno{width:110px; white-space:nowrap; font-family:'Courier New',monospace;}
-    .stmt-mag{font-size:14px; line-height:1.35;}
-    .stmt-rec{width:120px;}
-    .rec-line{border-bottom:1.5px solid #0B2148; height:22px; min-width:90px;}
+    body{font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif; color:#000; max-width:760px; margin:16px auto; padding:0 8px; -webkit-print-color-adjust:exact; print-color-adjust:exact; background:#fff;}
+    .stmt-head{text-align:center; border-bottom:1.5px solid #0B2148; padding-bottom:6px; margin-bottom:6px;}
+    .stmt-head h1{font-size:16px; margin:0 0 2px; letter-spacing:.01em; color:#0B2148; font-weight:800;}
+    .stmt-head p{margin:0; font-size:10.5px; color:#000;}
+    .stmt-title{font-size:12px; font-weight:700; margin:6px 0 1px; color:#0B2148;}
+    .stmt-sub{font-size:10.5px; color:#000; margin:0 0 6px;}
+    table{width:100%; border-collapse:collapse; margin-bottom:4px; border:1px solid #DFE5EF;}
+    thead{display:table-header-group;}
+    tr{page-break-inside:avoid; break-inside:avoid;}
+    th{text-align:left; font-size:9.5px; text-transform:uppercase; letter-spacing:.04em; padding:4px 5px; background:#0B2148; color:#fff; font-weight:600;}
+    td{font-size:10.5px; line-height:1.25; padding:2.5px 5px; vertical-align:top; border-bottom:1px solid #E7ECF4;}
+    .stmt-sno{width:30px;}
+    .stmt-area{width:90px;}
+    .stmt-billno{width:68px; white-space:nowrap; font-family:'Courier New',monospace; font-size:10px;}
+    .stmt-mag{font-size:10px; line-height:1.25;}
+    .stmt-rec{width:84px;}
+    .rec-line{border-bottom:1px solid #0B2148; height:12px; min-width:70px;}
     tfoot .rec-line{height:auto; border-bottom:none;}
     table.stmt-mags{width:auto; min-width:380px; margin-top:22px; border:1px solid #DFE5EF;}
     table.stmt-mags td{font-size:15px; padding:6px 10px;}
@@ -6023,9 +6038,9 @@ function buildBillStatementHTML(list, f){
       body.dm #dmView .pg{border:none; margin:0; padding:0; page-break-after:always; break-after:page;}
       body.dm #dmView .pg:last-child{page-break-after:auto; break-after:auto;}
     }
-    .stmt-bal{width:125px; text-align:right; font-weight:600;}
-    tfoot td{font-weight:800; font-size:17px; color:#0B2148; border-top:2px solid #0B2148; border-bottom:none;}
-    @media print{ .no-print{display:none;} body{margin:10px auto;} }
+    .stmt-bal{width:74px; text-align:right; font-weight:600;}
+    tfoot td{font-weight:800; font-size:11.5px; color:#0B2148; border-top:1.5px solid #0B2148; border-bottom:none;}
+    @media print{ @page{ size:A4 portrait; margin:8mm; } .no-print{display:none;} body{margin:0 auto; max-width:none; padding:0;} }
   </style>
   </head><body>
     <div id="stmtCapture">
@@ -6041,15 +6056,15 @@ function buildBillStatementHTML(list, f){
       <tbody>${rows}</tbody>
       <tfoot><tr><td colspan="4">TOTAL BILLS: ${list.length}</td><td><div class="rec-line">₹0.00</div></td><td style="text-align:right;">${fmtMoney(totalAmt)}</td></tr></tfoot>
     </table>
-    ${magTotalsHTML}
     </div>
     <div id="dmView"></div>
     <div class="no-print dm-btns" style="text-align:center; margin-top:20px; gap:10px; justify-content:center; align-items:center; flex-wrap:wrap; font-family:'Inter',sans-serif; font-size:13px;">
-      <label>Columns <select id="dmCols"><option value="80">80 (10 cpi)</option><option value="96">96 (12 cpi)</option><option value="132" selected>132 (wide carriage)</option></select></label>
-      <label>Rows / page <input id="dmRows" type="number" min="5" max="200" value="45" style="width:60px;"></label>
-      <button onclick="window.print()" style="padding:9px 22px; cursor:pointer; background:#0B2148; color:#fff; border:none; border-radius:5px; font-weight:600; font-size:13px;">🖨 Print (Dot Matrix)</button>
-      <button onclick="dmToggle(false)" style="padding:9px 22px; cursor:pointer; background:#fff; color:#0B2148; border:1px solid #0B2148; border-radius:5px; font-weight:600; font-size:13px;">← Back</button>
-      <div style="width:100%; color:#000; font-size:12px;">Plain-text layout. In the print dialog choose your dot matrix printer, A4 / Continuous paper, Margins: None/Default, Scale: 100%.</div>
+      <label>Columns <select id="dmCols"><option value="80">80 (10 cpi)</option><option value="96" selected>96 (12 cpi)</option><option value="132">132 (wide carriage)</option></select></label>
+      <label>Rows / page <input id="dmRows" type="number" min="5" max="200" value="33" style="width:60px;"></label>
+      <button onclick="window.print()" style="padding:9px 22px; cursor:pointer; background:#0B2148; color:#fff; border:none; border-radius:5px; font-weight:600; font-size:13px;">🖨 Print</button>
+      <button id="exportPdfBtnDm" onclick="exportStatementPDF()" style="padding:9px 22px; cursor:pointer; background:#fff; color:#0B2148; border:1px solid #0B2148; border-radius:5px; font-weight:600; font-size:13px;">📄 Export PDF</button>
+      <button onclick="dmToggle(false)" style="padding:9px 22px; cursor:pointer; background:#fff; color:#0B2148; border:1px solid #0B2148; border-radius:5px; font-weight:600; font-size:13px;">← Standard Layout</button>
+      <div style="width:100%; color:#000; font-size:12px;">Compact layout — about 33 customers per page. In the print dialog choose A4 / Continuous paper, Margins: None/Default, Scale: 100%.</div>
     </div>
     <div class="no-print std-btns" style="text-align:center; margin-top:20px; display:flex; gap:10px; justify-content:center;">
       <button onclick="window.print()" style="padding:9px 22px; cursor:pointer; background:#0B2148; color:#fff; border:none; border-radius:5px; font-family:'Inter',sans-serif; font-weight:600; font-size:13px;">🖨 Print</button>
@@ -6078,6 +6093,8 @@ function buildBillStatementHTML(list, f){
         for(var p=0;p<pcount;p++){
           var pg=dmMk('div','pg'); pg.style.fontSize=fontPx+'px'; pg.style.width=(W+1)+'ch'; pg.style.paddingRight='1ch';
           var t1=dmMk('div','ctr',String(DM.company).toUpperCase()); pg.appendChild(t1);
+          if(DM.addr) pg.appendChild(dmMk('div','ctr',DM.addr));
+          if(DM.contact) pg.appendChild(dmMk('div','ctr',DM.contact));
           pg.appendChild(dmMk('div','ctr',DM.title));
           pg.appendChild(dmRow('1fr 14ch',[dmMk('span','',DM.sub),dmMk('span','rt','Page '+(p+1)+'/'+pcount)]));
           var h=dmRow(cols,['S.NO','CUSTOMER NAME','BILL NO','MAGAZINE (QTY)','REC. AMT','BAL. AMT'].map(function(t,i){ return dmMk('span',i>=4?'rt':'',t); }),'hd');
@@ -6089,14 +6106,6 @@ function buildBillStatementHTML(list, f){
           if(p===pcount-1){
             var tb=dmMk('span','','TOTAL BILLS: '+DM.rows.length); tb.style.gridColumn='1 / 4'; tb.style.whiteSpace='nowrap';
             pg.appendChild(dmRow(cols,[tb,dmMk('span',''),dmMk('span','rt','0.00'),dmMk('span','rt',DM.total)],'tt'));
-            if(DM.mags && DM.mags.length){
-              var mc=(cS+cC+cB+2)+'ch 12ch', tq=0;
-              var mt=dmMk('div','',''); mt.style.marginTop='1.4em';
-              mt.appendChild(dmRow(mc,[dmMk('span','','MAGAZINE NAME'),dmMk('span','rt','TOTAL QTY')],'hd'));
-              DM.mags.forEach(function(m){ tq+=m.qty; mt.appendChild(dmRow(mc,[dmMk('span','',m.name),dmMk('span','rt',String(m.qty))])); });
-              mt.appendChild(dmRow(mc,[dmMk('span','','TOTAL'),dmMk('span','rt',String(tq))],'tt'));
-              pg.appendChild(mt);
-            }
           }
           host.appendChild(pg);
         }
@@ -6111,21 +6120,80 @@ function buildBillStatementHTML(list, f){
       // html2canvas + jsPDF (loaded above) since this window has no access to the
       // main app's in-memory libraries, then renders #stmtCapture to a downloadable PDF.
       function exportStatementPDF(){
+        if(document.body.classList.contains('dm')){ return exportCompactPDF(); }
         var btn = document.getElementById('exportPdfBtn');
-        if(typeof window.jspdf === 'undefined' || !window.jspdf.jsPDF){
+        if(typeof window.html2canvas === 'undefined' || !window.jspdf || !window.jspdf.jsPDF){
           alert('PDF library is still loading — please try again in a moment.');
           return;
         }
         if(btn){ btn.disabled = true; btn.textContent = 'Preparing PDF…'; }
-        var jsPDF = window.jspdf.jsPDF;
-        var pdf = new jsPDF({ unit:'pt', format:'a4' });
-        pdf.html(document.getElementById('stmtCapture'), {
-          x:24, y:24, width:547, windowWidth:1000,
-          callback: function(doc){
-            doc.save('Bill-Balance-Statement.pdf');
-            if(btn){ btn.disabled = false; btn.textContent = '📄 Export PDF'; }
+        function reset(){ if(btn){ btn.disabled = false; btn.textContent = '📄 Export PDF'; } }
+        var el = document.getElementById('stmtCapture');
+        var SC = 2;
+        // Draw the statement exactly as the browser shows it (so Tamil text is correct), then cut it into
+        // A4 pages ONLY between customer rows, repeating the column headings on every page.
+        window.html2canvas(el, { scale:SC, backgroundColor:'#ffffff', useCORS:true }).then(function(cv){
+          var elTop = el.getBoundingClientRect().top, W = el.offsetWidth, H = el.offsetHeight;
+          function rel(n){ var r = n.getBoundingClientRect(); return { t:r.top-elTop, b:r.bottom-elTop }; }
+          var rows = Array.prototype.slice.call(el.querySelectorAll('tbody tr')).map(rel);
+          var tf = el.querySelector('tfoot tr'); if(tf) rows.push(rel(tf));
+          var th = rel(el.querySelector('thead'));
+          var hh = th.b - th.t;
+          var pdf = new window.jspdf.jsPDF({ unit:'pt', format:'a4' });
+          var pw = pdf.internal.pageSize.getWidth(), ph = pdf.internal.pageSize.getHeight();
+          var M = 16, cw = pw - 2*M, k = cw / W;            // css px -> pt
+          var maxH = (ph - 2*M) / k;                         // usable css px per page
+          // Work out [startY, endY] for each page.
+          var segs = [], start = 0, pageNo = 0, i = 0;
+          while(i < rows.length){
+            var first = i, limit = maxH - (pageNo ? hh : 0), startY = pageNo ? rows[i].t : 0, endY = startY;
+            while(i < rows.length && rows[i].b - startY <= limit){ endY = rows[i].b; i++; }
+            if(i === first){ endY = rows[i].b; i++; }        // a single row taller than a page: keep it whole
+            segs.push([startY, i >= rows.length ? H : endY]);
+            pageNo++;
           }
-        });
+          segs.forEach(function(sg, n){
+            var segH = sg[1] - sg[0], extra = n ? hh : 0;
+            var pc = document.createElement('canvas');
+            pc.width = cv.width; pc.height = Math.ceil((segH + extra) * SC);
+            var ctx = pc.getContext('2d');
+            ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, pc.width, pc.height);
+            if(n) ctx.drawImage(cv, 0, th.t*SC, cv.width, hh*SC, 0, 0, cv.width, hh*SC);
+            ctx.drawImage(cv, 0, sg[0]*SC, cv.width, segH*SC, 0, extra*SC, cv.width, segH*SC);
+            if(n) pdf.addPage();
+            pdf.addImage(pc.toDataURL('image/jpeg', 0.95), 'JPEG', M, M, cw, (segH + extra) * k);
+          });
+          pdf.save('Bill-Balance-Statement.pdf');
+          reset();
+        }).catch(function(){ alert('Could not create the PDF.'); reset(); });
+      }
+      // Compact layout -> PDF: one A4 page per 33-row page, drawn exactly as shown on screen.
+      function exportCompactPDF(){
+        var btn = document.getElementById('exportPdfBtnDm');
+        if(typeof window.html2canvas === 'undefined' || !window.jspdf || !window.jspdf.jsPDF){
+          alert('PDF library is still loading — please try again in a moment.');
+          return;
+        }
+        if(btn){ btn.disabled = true; btn.textContent = 'Preparing PDF…'; }
+        var pdf = new window.jspdf.jsPDF({ unit:'pt', format:'a4' });
+        var pw = pdf.internal.pageSize.getWidth(), ph = pdf.internal.pageSize.getHeight();
+        var pages = Array.prototype.slice.call(document.querySelectorAll('#dmView .pg'));
+        var i = 0;
+        function done(){ pdf.save('Bill-Balance-Statement.pdf'); if(btn){ btn.disabled = false; btn.textContent = '📄 Export PDF'; } }
+        function next(){
+          if(i >= pages.length){ done(); return; }
+          var el = pages[i], oldBorder = el.style.border;
+          el.style.border = 'none';
+          window.html2canvas(el, { scale:2, backgroundColor:'#ffffff' }).then(function(cv){
+            el.style.border = oldBorder;
+            var w = pw - 48, h = cv.height * w / cv.width;
+            if(h > ph - 48){ h = ph - 48; w = cv.width * h / cv.height; }
+            if(i > 0) pdf.addPage();
+            pdf.addImage(cv.toDataURL('image/jpeg', 0.95), 'JPEG', (pw - w) / 2, 24, w, h);
+            i++; next();
+          }).catch(function(){ el.style.border = oldBorder; alert('Could not create the PDF.'); if(btn){ btn.disabled = false; btn.textContent = '📄 Export PDF'; } });
+        }
+        next();
       }
     <\/script>
   </body></html>`;
@@ -6801,8 +6869,8 @@ function buildBillsPrintHTML(bills, opts){
       </div>
     </div>
     ${pages}
-    ${opts.billNo ? `<script src="app://crm/vendor/html2canvas.min.js"><\/script>
-    <script src="app://crm/vendor/jspdf.umd.min.js"><\/script>` : ''}
+    ${opts.billNo ? `<script src="app://crm/vendor/html2canvas.min.js" onerror="this.onerror=null;var s=document.createElement('script');s.src='https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js';document.head.appendChild(s);"><\/script>
+    <script src="app://crm/vendor/jspdf.umd.min.js" onerror="this.onerror=null;var s=document.createElement('script');s.src='https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js';document.head.appendChild(s);"><\/script>` : ''}
     <script>
     var BILL_NO = ${JSON.stringify(opts.billNo || '')};
     // Export PDF from this window: asks where to save (Save As), builds the PDF, writes it to disk.
@@ -6999,6 +7067,9 @@ function toggleBillSelectAll(checked){
    that image into a real single-page PDF with jsPDF — so both the Export PDF buttons and the
    WhatsApp hand-off send an actual .pdf invoice, not just an image. */
 function generateInvoicePdfBlob(b){
+  return ensurePdfLibs().then(()=>_generateInvoicePdfBlobImpl(b));
+}
+function _generateInvoicePdfBlobImpl(b){
   return new Promise((resolve, reject)=>{
     if(typeof html2canvas === 'undefined'){ reject(new Error('html2canvas not loaded')); return; }
     if(typeof window.jspdf === 'undefined' || !window.jspdf.jsPDF){ reject(new Error('jsPDF not loaded')); return; }
